@@ -23,6 +23,12 @@ struct Install: ParsableCommand {
     @Flag(name: .long, help: "Tap the hotkey once to start, again to stop (default: hold).")
     var toggle: Bool = false
 
+    @Flag(name: .long, help: "Also copy each transcript to the clipboard.")
+    var copy: Bool = false
+
+    @Option(name: .long, help: "Word-replacement dictionary the daemon should use.")
+    var dictionary: String?
+
     func run() throws {
         if launchAtLogin == uninstall {
             FileHandle.standardError.write(Data(
@@ -60,6 +66,12 @@ struct Install: ParsableCommand {
         var args = [binary, "run", "--skip-doctor", "--hotkey", hotkey]
         if toggle {
             args.append("--toggle")
+        }
+        if copy {
+            args.append("--copy")
+        }
+        if let dictionary {
+            args.append(contentsOf: ["--dictionary", dictionary])
         }
 
         let plist: [String: Any] = [

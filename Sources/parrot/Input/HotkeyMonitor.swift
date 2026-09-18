@@ -52,12 +52,34 @@ final class HotkeyMonitor {
         self.onEvent = onEvent
 
         let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        let trusted = AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
-        if !trusted {
+        if !AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary) {
+            // Stay alive while the user grants. macOS withdraws a pending
+            // request when the asking process dies, so exiting immediately
+            // means the Settings row never appears — and parrot can never be
+            // granted. Poll instead, up to three minutes.
             FileHandle.standardError.write(Data(
-                "accessibility not granted — system prompt opened. Grant access, then quit and relaunch parrot.\n".utf8
+                "accessibility not granted — system prompt opened.\n".utf8
             ))
-            throw HotkeyError.tapCreateFailed
+            FileHandle.standardError.write(Data(
+                "waiting up to 180s for you to enable parrot in System Settings → Privacy & Security → Accessibility...\n".utf8
+            ))
+
+            var granted = false
+            for _ in 0..<90 {
+                Thread.sleep(forTimeInterval: 2)
+                if AXIsProcessTrusted() {
+                    granted = true
+                    break
+                }
+            }
+
+            guard granted else {
+                FileHandle.standardError.write(Data(
+                    "still not granted after 180s — giving up.\n".utf8
+                ))
+                throw HotkeyError.tapCreateFailed
+            }
+            FileHandle.standardError.write(Data("✓ accessibility granted\n".utf8))
         }
 
         let mask: CGEventMask =

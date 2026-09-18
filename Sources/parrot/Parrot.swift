@@ -8,7 +8,7 @@ struct Parrot: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "parrot",
         abstract: "Minimal macOS dictation daemon. Hold Fn, speak, release.",
-        subcommands: [Run.self, Setup.self, Doctor.self, Models.self, Install.self],
+        subcommands: [Run.self, Setup.self, Doctor.self, Models.self, Install.self, DictionaryCheck.self],
         defaultSubcommand: Run.self
     )
 }
@@ -39,6 +39,12 @@ struct Run: ParsableCommand {
 
     @Flag(name: .long, help: "Tap the hotkey once to start, again to stop (default: hold).")
     var toggle: Bool = false
+
+    @Flag(name: .long, help: "Also copy each transcript to the clipboard.")
+    var copy: Bool = false
+
+    @Option(name: .long, help: "Word-replacement dictionary (default: ~/.config/parrot/dictionary.json).")
+    var dictionary: String?
 
     func run() throws {
         guard let hotkeyTarget = HotkeyTarget(rawValue: hotkey) else {
@@ -102,7 +108,23 @@ struct Run: ParsableCommand {
         }
         let menuBar = MainActor.assumeIsolated { MenuBarController(modelID: chosenModel.id) }
         let toggleMode = self.toggle
+        let copyToClipboard = self.copy
         var isRecording = false
+
+        // A bad dictionary must never take dictation offline — warn and run
+        // without replacements.
+        let dictPath = dictionary ?? ReplacementDictionary.defaultPath
+        var replacements = ReplacementDictionary.empty
+        do {
+            if let loaded = try ReplacementDictionary.load(path: dictPath) {
+                replacements = loaded
+            }
+        } catch {
+            FileHandle.standardError.write(Data(
+                "warning: ignoring \(dictPath) — \(error)\n".utf8
+            ))
+            FileHandle.standardError.write(Data("run `parrot dictionary` to check it\n".utf8))
+        }
 
         func beginRecording() {
             do {
@@ -149,12 +171,16 @@ struct Run: ParsableCommand {
             Task {
                 let started = Date()
                 do {
-                    let text = try await transcriber.transcribe(samples)
+                    let raw = try await transcriber.transcribe(samples)
+                    let text = replacements.apply(to: raw)
                     let elapsed = Date().timeIntervalSince(started)
                     FileHandle.standardError.write(Data(
                         String(format: "→ %.2fs · %@\n", elapsed, text).utf8
                     ))
                     await MainActor.run {
+                        if copyToClipboard {
+                            Clipboard.copy(text)
+                        }
                         TextInjector.inject(text)
                         overlay?.hide()
                         menuBar.setRecording(false)
@@ -205,7 +231,9 @@ struct Run: ParsableCommand {
         signal(SIGINT, SIG_IGN)
 
         let modeLabel = toggleMode ? "toggle" : "hold"
-        FileHandle.standardError.write(Data("listening on \(hotkeyTarget.rawValue) \(modeLabel) · model: \(chosenModel.id) · ^C to quit\n".utf8))
+        let copyLabel = copyToClipboard ? " · copying to clipboard" : ""
+        let dictLabel = replacements.count > 0 ? " · \(replacements.count) replacements" : ""
+        FileHandle.standardError.write(Data("listening on \(hotkeyTarget.rawValue) \(modeLabel) · model: \(chosenModel.id)\(copyLabel)\(dictLabel) · ^C to quit\n".utf8))
         app.run()
     }
 }
@@ -261,6 +289,52 @@ struct Models: ParsableCommand {
             }
             sem.wait()
             if let e = capturedError { throw e }
+        }
+    }
+}
+
+/// `parrot dictionary` — check the replacement file and report what loaded.
+/// Exists because the daemon only warns about a bad file in its log, which is
+/// easy to miss; this gives a plain answer on demand.
+struct DictionaryCheck: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "dictionary",
+        abstract: "Check the word-replacement dictionary."
+    )
+
+    @Option(name: .long, help: "Path to check (default: ~/.config/parrot/dictionary.json).")
+    var path: String?
+
+    @Option(name: .long, help: "Show what a sample phrase would become.")
+    var test: String?
+
+    func run() throws {
+        let target = path ?? ReplacementDictionary.defaultPath
+
+        let dict: ReplacementDictionary
+        do {
+            guard let loaded = try ReplacementDictionary.load(path: target) else {
+                print("no dictionary at \(target)")
+                print("(that's fine — replacements are optional)")
+                return
+            }
+            dict = loaded
+        } catch {
+            print("✗ \(target)")
+            print("  \(error)")
+            print()
+            print("parrot will keep running and skip replacements until this is fixed.")
+            throw ExitCode(1)
+        }
+
+        print("✓ \(target)")
+        print("  \(dict.count) replacements loaded")
+
+        if let test {
+            let result = dict.apply(to: test)
+            print()
+            print("  in:  \(test)")
+            print("  out: \(result)")
         }
     }
 }
