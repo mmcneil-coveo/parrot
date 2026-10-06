@@ -46,6 +46,9 @@ struct Run: ParsableCommand {
     @Option(name: .long, help: "Word-replacement dictionary (default: ~/.config/parrot/dictionary.json).")
     var dictionary: String?
 
+    @Flag(name: .long, help: "Mute system audio output while recording.")
+    var mute: Bool = false
+
     func run() throws {
         guard let hotkeyTarget = HotkeyTarget(rawValue: hotkey) else {
             FileHandle.standardError.write(Data("unknown hotkey: \(hotkey)\n".utf8))
@@ -109,6 +112,7 @@ struct Run: ParsableCommand {
         let menuBar = MainActor.assumeIsolated { MenuBarController(modelID: chosenModel.id) }
         let toggleMode = self.toggle
         let copyToClipboard = self.copy
+        let muteWhileRecording = self.mute
         var isRecording = false
 
         // A bad dictionary must never take dictation offline — warn and run
@@ -128,6 +132,7 @@ struct Run: ParsableCommand {
 
         func beginRecording() {
             do {
+                if muteWhileRecording { SystemAudio.mute() }
                 try capture.start()
                 isRecording = true
                 FileHandle.standardError.write(Data("● recording\n".utf8))
@@ -136,6 +141,7 @@ struct Run: ParsableCommand {
                     menuBar.setRecording(true)
                 }
             } catch {
+                if muteWhileRecording { SystemAudio.restore() }
                 FileHandle.standardError.write(Data("capture failed: \(error)\n".utf8))
             }
         }
@@ -143,6 +149,7 @@ struct Run: ParsableCommand {
         func endRecordingAndTranscribe() {
             isRecording = false
             let samples = capture.stop()
+            if muteWhileRecording { SystemAudio.restore() }
             MainActor.assumeIsolated {
                 overlay?.show(.transcribing)
                 menuBar.setTranscribing()
@@ -221,19 +228,32 @@ struct Run: ParsableCommand {
             throw ExitCode(1)
         }
 
-        let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-        sigint.setEventHandler {
+        // Never leave the user muted because parrot died mid-recording.
+        let shutdown = {
             FileHandle.standardError.write(Data("\nshutting down\n".utf8))
+            if muteWhileRecording { SystemAudio.restore() }
             monitor.stop()
             NSApp.terminate(nil)
         }
+
+        let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+        sigint.setEventHandler(handler: shutdown)
         sigint.resume()
         signal(SIGINT, SIG_IGN)
+
+        // launchctl bootout/kickstart sends SIGTERM, which is how this daemon
+        // is normally stopped — without this, a restart mid-recording would
+        // leave the volume down.
+        let sigterm = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        sigterm.setEventHandler(handler: shutdown)
+        sigterm.resume()
+        signal(SIGTERM, SIG_IGN)
 
         let modeLabel = toggleMode ? "toggle" : "hold"
         let copyLabel = copyToClipboard ? " · copying to clipboard" : ""
         let dictLabel = replacements.count > 0 ? " · \(replacements.count) replacements" : ""
-        FileHandle.standardError.write(Data("listening on \(hotkeyTarget.rawValue) \(modeLabel) · model: \(chosenModel.id)\(copyLabel)\(dictLabel) · ^C to quit\n".utf8))
+        let muteLabel = muteWhileRecording ? " · muting while recording" : ""
+        FileHandle.standardError.write(Data("listening on \(hotkeyTarget.rawValue) \(modeLabel) · model: \(chosenModel.id)\(copyLabel)\(dictLabel)\(muteLabel) · ^C to quit\n".utf8))
         app.run()
     }
 }

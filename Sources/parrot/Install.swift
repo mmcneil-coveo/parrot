@@ -29,6 +29,9 @@ struct Install: ParsableCommand {
     @Option(name: .long, help: "Word-replacement dictionary the daemon should use.")
     var dictionary: String?
 
+    @Flag(name: .long, help: "Mute system audio output while recording.")
+    var mute: Bool = false
+
     func run() throws {
         if launchAtLogin == uninstall {
             FileHandle.standardError.write(Data(
@@ -72,6 +75,9 @@ struct Install: ParsableCommand {
         }
         if let dictionary {
             args.append(contentsOf: ["--dictionary", dictionary])
+        }
+        if mute {
+            args.append("--mute")
         }
 
         let plist: [String: Any] = [
