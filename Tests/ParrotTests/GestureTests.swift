@@ -137,4 +137,85 @@ final class HotkeyMatchTests: XCTestCase {
         XCTAssertNil(input(55, .maskCommand, .rightCommand, held: false))
         XCTAssertNil(input(54, [], .rightCommand, held: false))
     }
+
+
+    // MARK: - Latch (hands-free)
+
+    private func latching(after: TimeInterval = 2, cap: TimeInterval = 300) -> Gesture {
+        Gesture(latchAfter: after, maximumLatched: cap)
+    }
+
+    func testLatchIsOffByDefault() {
+        var g = Gesture()
+        _ = g.handle(down, at: 0)
+        XCTAssertEqual(g.handle(.hotkeyUp, at: 10), .transcribe)
+        XCTAssertFalse(g.isLatched)
+    }
+
+    func testLongHoldLatchesAndKeepsRecording() {
+        var g = latching()
+        XCTAssertEqual(g.handle(down, at: 0), .start)
+        // released after the latch threshold: nothing stops
+        XCTAssertNil(g.handle(.hotkeyUp, at: 2.5))
+        XCTAssertTrue(g.isLatched)
+        XCTAssertFalse(g.isHeld, "the key is not down while latched")
+    }
+
+    func testNextPressStopsALatchedRecording() {
+        var g = latching()
+        _ = g.handle(down, at: 0)
+        _ = g.handle(.hotkeyUp, at: 2.5)
+        XCTAssertEqual(g.handle(down, at: 20), .transcribe)
+        XCTAssertFalse(g.isLatched)
+        // the release of that stopping press must not start anything
+        XCTAssertNil(g.handle(.hotkeyUp, at: 20.1))
+    }
+
+    func testHoldShorterThanTheLatchThresholdStillTranscribes() {
+        var g = latching(after: 2)
+        _ = g.handle(down, at: 0)
+        XCTAssertEqual(g.handle(.hotkeyUp, at: 1.5), .transcribe)
+        XCTAssertFalse(g.isLatched)
+    }
+
+    func testShortTapIsStillDiscardedWithLatchingOn() {
+        var g = latching()
+        _ = g.handle(down, at: 0)
+        XCTAssertEqual(g.handle(.hotkeyUp, at: 0.2), .cancel)
+        XCTAssertFalse(g.isLatched)
+    }
+
+    func testOtherModifiersDoNotCancelALatchedRecording() {
+        var g = latching()
+        _ = g.handle(down, at: 0)
+        _ = g.handle(.hotkeyUp, at: 2.5)
+        // ordinary typing while hands-free
+        XCTAssertNil(g.handle(.otherModifier, at: 5))
+        XCTAssertTrue(g.isLatched, "typing must not end a hands-free recording")
+    }
+
+    func testLatchedRecordingStopsItselfAtTheCap() {
+        var g = latching(cap: 60)
+        _ = g.handle(down, at: 0)
+        _ = g.handle(.hotkeyUp, at: 2.5)
+        XCTAssertNil(g.tick(at: 59))
+        XCTAssertEqual(g.tick(at: 60), .transcribe, "the cap is what makes latching safe")
+        XCTAssertFalse(g.isLatched)
+        XCTAssertNil(g.tick(at: 120), "no repeat once stopped")
+    }
+
+    func testTickDoesNothingWhenNotLatched() {
+        var g = latching()
+        XCTAssertNil(g.tick(at: 1000))
+        _ = g.handle(down, at: 0)
+        XCTAssertNil(g.tick(at: 1000), "a held key is bounded by the user's hand")
+    }
+
+    func testResetCancelsALatchedRecording() {
+        var g = latching()
+        _ = g.handle(down, at: 0)
+        _ = g.handle(.hotkeyUp, at: 2.5)
+        XCTAssertEqual(g.reset(), .cancel)
+        XCTAssertFalse(g.isLatched)
+    }
 }

@@ -92,6 +92,12 @@ public enum Daemon {
         app.setActivationPolicy(.accessory)
 
         let monitor = HotkeyMonitor(key: options.hotkey ?? settings.current.hotkey.key, debug: options.debugHotkey)
+        MainActor.assumeIsolated {
+            monitor.setLatch(
+                after: settings.current.hotkey.latchThreshold,
+                maximum: settings.current.hotkey.latchMaximum
+            )
+        }
         let capture = AudioCapture(mode: options.captureMode)
         let overlay: RecordingOverlay? = options.noOverlay ? nil : RecordingOverlay()
         if let overlay {
@@ -145,13 +151,19 @@ public enum Daemon {
         if let overlay { observers.append(overlay) }
         observers.append(menuBar)
         observers.append(LatencyLog())
+        if settings.current.mute.whileRecording {
+            observers.append(MuteObserver())
+        }
         let controller = DictationController(
             capture: capture,
             transcriber: transcriber,
             processors: [DictionaryProcessor(store: dictionary)],
             observers: observers,
             dumpWav: options.dumpWav,
-            delivery: TextDelivery(mode: options.injectMode),
+            delivery: TextDelivery(
+                mode: options.injectMode,
+                keepOnClipboard: settings.current.delivery.keepOnClipboard
+            ),
             context: dictionaryContext
         )
         switcher.controller = controller
@@ -168,6 +180,16 @@ public enum Daemon {
                     monitor.setKey(new.hotkey.key)
                     menuBar.setHotkey(new.hotkey.key)
                     Log.info("hotkey: \(new.hotkey.key.rawValue); hold \(new.hotkey.key.shortName) to dictate")
+                }
+                if old.hotkey.latch != new.hotkey.latch
+                    || old.hotkey.latchAfter != new.hotkey.latchAfter
+                    || old.hotkey.latchMaximum != new.hotkey.latchMaximum {
+                    monitor.setLatch(after: new.hotkey.latchThreshold, maximum: new.hotkey.latchMaximum)
+                    if new.hotkey.latch {
+                        Log.info("hands-free: hold \(new.hotkey.key.shortName) for \(Int(new.hotkey.latchAfter))s to latch; press again to stop; stops itself after \(Int(new.hotkey.latchMaximum))s")
+                    } else {
+                        Log.info("hands-free: off; push-to-talk only")
+                    }
                 }
             }
             if old.model != new.model {

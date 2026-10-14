@@ -43,6 +43,13 @@ public final class HotkeyMonitor {
     private var runLoopSource: CFRunLoopSource?
     private var gesture = Gesture()
 
+    /// Turn hands-free latching on or off, and set its limits. Applied to the
+    /// next hold; a recording in progress keeps the rules it started with.
+    public func setLatch(after: TimeInterval?, maximum: TimeInterval) {
+        gesture.latchAfter = after
+        gesture.maximumLatched = maximum
+    }
+
     private var recovery = TapRecovery()
     private var pendingRetry: DispatchWorkItem?
     private var watchdog: Timer?
@@ -111,6 +118,7 @@ public final class HotkeyMonitor {
 
         let watchdog = Timer(timeInterval: Self.watchdogInterval, repeats: true) { [weak self] _ in
             self?.checkTap()
+            self?.checkLatchCap()
         }
         RunLoop.main.add(watchdog, forMode: .common)
         self.watchdog = watchdog
@@ -141,6 +149,14 @@ public final class HotkeyMonitor {
         }
         guard let input = Self.input(keycode: keycode, flags: flags, key: key, held: gesture.isHeld) else { return }
         feed(input)
+    }
+
+    /// Stops a hands-free recording that has run past its cap.
+    private func checkLatchCap() {
+        if let action = gesture.tick(at: ProcessInfo.processInfo.systemUptime) {
+            Log.info("○ hands-free recording reached its limit — transcribing")
+            emit(action)
+        }
     }
 
     private func feed(_ input: Gesture.Input) {

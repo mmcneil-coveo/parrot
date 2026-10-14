@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 
 /// Push-to-talk key preferences (#42).
 ///
@@ -9,13 +10,34 @@ package struct HotkeySettings: Codable, Equatable {
     /// The modifier held to dictate. An unknown name decodes to the default.
     package var key: HotkeyKey = .fn
 
+    /// Hands-free dictation: hold the key at least this long and the
+    /// recording keeps running after you let go, until you press the key
+    /// again. Off (push-to-talk only) when false, which is the default and
+    /// what ADR-003 specifies.
+    package var latch: Bool = false
+
+    /// How long the hold must be to latch. Shorter holds are ordinary
+    /// push-to-talk, so a quick dictation still ends on release.
+    package var latchAfter: TimeInterval = 2
+
+    /// A hands-free recording stops itself after this long. ADR-003 rejected
+    /// latching partly because a missed stop records forever; this is the
+    /// answer to that, so it is always in force.
+    package var latchMaximum: TimeInterval = 300
+
     package init() {}
 
     package init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let name = try c.decodeIfPresent(String.self, forKey: .key)
         key = name.flatMap(HotkeyKey.init(rawValue:)) ?? .fn
+        latch = try c.decodeIfPresent(Bool.self, forKey: .latch) ?? false
+        latchAfter = try c.decodeIfPresent(TimeInterval.self, forKey: .latchAfter) ?? 2
+        latchMaximum = try c.decodeIfPresent(TimeInterval.self, forKey: .latchMaximum) ?? 300
     }
+
+    /// What to hand `HotkeyMonitor.setLatch`: nil when latching is off.
+    package var latchThreshold: TimeInterval? { latch ? latchAfter : nil }
 }
 
 /// The modifiers Parrot can use as its push-to-talk key (ADR-003). The raw

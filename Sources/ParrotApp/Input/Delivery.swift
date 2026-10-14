@@ -43,9 +43,13 @@ enum DeliveryDecision: Equatable {
 @MainActor
 final class TextDelivery {
     private let injector: TextInjector
+    /// Leave the transcript on the clipboard instead of restoring what was
+    /// there before.
+    private let keepOnClipboard: Bool
 
-    init(mode: InjectMode) {
+    init(mode: InjectMode, keepOnClipboard: Bool = false) {
         self.injector = TextInjector(mode: mode)
+        self.keepOnClipboard = keepOnClipboard
     }
 
     /// Throws `DeliveryError` when the transcript did not reach the cursor.
@@ -59,6 +63,12 @@ final class TextDelivery {
             // The kind of character only: the log never carries text.
             Log.info("  before cursor: \(before.kind)\(spaced.first == " " && text.first != " " ? " · leading space" : "")")
             injector.inject(spaced)
+            if keepOnClipboard {
+                // Replaces the pending restore, so the transcript stays put.
+                // The text as delivered, without the spacing added for the
+                // cursor position.
+                injector.copyToClipboard(text)
+            }
         case .discardSecure:
             let when = focusAtStart?.isSecure == true ? "recording start" : "delivery"
             Log.info("  secure field focused at \(when); transcript discarded")
